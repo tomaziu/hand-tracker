@@ -34,6 +34,8 @@ class HandTracker:
         self.photo_pos = [0, 0]
         self.photo_size = (0, 0)
         self.photo_mask = None
+        self.capture_timer = 0
+        self.capture_shape_pts = None
         
         self.cap = None
         self.running = False
@@ -219,7 +221,26 @@ class HandTracker:
                 self.hand_info.config(text=f"MAOS: 0 | FPS: {self.fps}")
             
             if three_fingers_down and not self.was_3fingers_down and shape_pts is not None:
-                self.capture_photo_in_shape(img, shape_pts)
+                self.capture_timer = time.time()
+                self.capture_shape_pts = shape_pts.copy()
+            
+            if not three_fingers_down and self.capture_timer > 0:
+                self.capture_timer = 0
+                self.capture_shape_pts = None
+            
+            if self.capture_timer > 0 and self.capture_shape_pts is not None:
+                elapsed = time.time() - self.capture_timer
+                if elapsed >= 1.0:
+                    self.capture_photo_in_shape(img, self.capture_shape_pts)
+                    self.capture_timer = 0
+                    self.capture_shape_pts = None
+                elif self.capture_shape_pts is not None:
+                    progress = elapsed / 1.0
+                    center = self.capture_shape_pts.reshape(-1, 2).mean(axis=0).astype(int)
+                    radius = int(20 + 20 * progress)
+                    cv2.circle(output, tuple(center), radius, (0, 255, 65), 2, cv2.LINE_AA)
+                    cv2.putText(output, f"{1.0 - elapsed:.1f}", (center[0] - 10, center[1] + 5), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 65), 1)
             
             self.was_3fingers_down = three_fingers_down
             
