@@ -158,7 +158,7 @@ class HandTracker:
             green[:] = (10, 40, 10)
             
             gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-            output = cv2.merge([gray // 6, gray // 2, gray // 6])
+            output = cv2.merge([gray // 3, gray, gray // 3])
             
             three_fingers_down = False
             shape_pts = None
