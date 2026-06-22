@@ -27,6 +27,11 @@ class HandTracker:
         
         self.FINGER_TIPS = [4, 8]
         
+        self.captured_photo = None
+        self.photo_shape_pts = None
+        self.was_3fingers_down = False
+        self.frame_for_capture = None
+        
         self.cap = None
         self.running = False
         self.hand_landmarker = None
@@ -65,7 +70,7 @@ class HandTracker:
         footer.pack(fill=tk.X, side=tk.BOTTOM)
         footer.pack_propagate(False)
         
-        self.hand_info = tk.Label(footer, text="MAOS: 0", 
+        self.hand_info = tk.Label(footer, text="MAOS: 0 | FOTO: NAO", 
                                   font=("Consolas", 10), bg="#0d0d0d", fg="#003300")
         self.hand_info.pack(side=tk.LEFT, padx=10)
         
@@ -78,6 +83,38 @@ class HandTracker:
         self.running = True
         self.status_label.config(text="[CONECTADO]", fg="#00ff41")
         self.process_frame()
+        
+    def is_finger_down(self, landmarks, tip_id, pip_id):
+        return landmarks[tip_id].y > landmarks[pip_id].y
+        
+    def check_3fingers_down(self, landmarks):
+        middle = self.is_finger_down(landmarks, 12, 10)
+        ring = self.is_finger_down(landmarks, 16, 14)
+        pinky = self.is_finger_down(landmarks, 20, 18)
+        return middle and ring and pinky
+        
+    def get_right_hand(self, result):
+        if not result.hand_landmarks or len(result.hand_landmarks) < 2:
+            return None, None, None
+        
+        hands_data = []
+        for i, (landmarks, handedness) in enumerate(zip(result.hand_landmarks, result.handednesses)):
+            label = handedness[0].category_name
+            hands_data.append((i, label, landmarks))
+        
+        right_hand = None
+        other_hand = None
+        for idx, label, landmarks in hands_data:
+            if label == "Right":
+                right_hand = landmarks
+            else:
+                other_hand = landmarks
+        
+        if right_hand is None and len(hands_data) >= 2:
+            right_hand = hands_data[0][2]
+            other_hand = hands_data[1][2]
+        
+        return right_hand, other_hand, len(hands_data)
         
     def process_frame(self):
         if not self.running:
@@ -104,30 +141,58 @@ class HandTracker:
             output = cv2.merge([gray//4, gray//2, gray//4])
             
             hand_tips = []
+            three_fingers_down = False
+            shape_pts = None
             
-            if result.hand_landmarks:
-                self.hand_info.config(text=f"MAOS: {len(result.hand_landmarks)}")
+            if result.hand_landmarks and len(result.hand_landmarks) >= 2:
+                right_hand, other_hand, count = self.get_right_hand(result)
                 
-                for hand_idx, hand_landmarks in enumerate(result.hand_landmarks):
+                if right_hand and other_hand:
+                    self.hand_info.config(text=f"MAOS: {count} | FOTO: {'SIM' if self.captured_photo is not None else 'NAO'}")
+                    
                     h, w, _ = output.shape
                     
-                    pts = []
-                    for lm in hand_landmarks:
-                        pts.append((int(lm.x * w), int(lm.y * h)))
+                    right_pts = []
+                    for lm in right_hand:
+                        right_pts.append((int(lm.x * w), int(lm.y * h)))
                     
-                    tips = [pts[i] for i in self.FINGER_TIPS]
-                    hand_tips.append(tips)
+                    other_pts = []
+                    for lm in other_hand:
+                        other_pts.append((int(lm.x * w), int(lm.y * h)))
                     
-                    for start, end in self.HAND_CONNECTIONS:
-                        cv2.line(output, pts[start], pts[end], (0, 255, 65), 1, cv2.LINE_AA)
+                    if self.check_3fingers_down(right_hand):
+                        three_fingers_down = True
                     
-                    for pt in pts:
+                    thumb_r = right_pts[4]
+                    index_r = right_pts[8]
+                    thumb_o = other_pts[4]
+                    index_o = other_pts[8]
+                    
+                    if thumb_r[0] > thumb_o[0]:
+                        thumb_r, thumb_o = thumb_o, thumb_r
+                        index_r, index_o = index_o, index_r
+                    
+                    shape_pts = np.array([thumb_r, index_r, index_o, thumb_o], np.int32)
+                    shape_pts = shape_pts.reshape((-1, 1, 2))
+                    
+                    cv2.polylines(output, [shape_pts], True, (0, 255, 65), 2, cv2.LINE_AA)
+                    
+                    for lm in right_hand:
+                        pt = (int(lm.x * w), int(lm.y * h))
                         cv2.circle(output, pt, 2, (0, 255, 65), -1)
-                
-                if len(hand_tips) == 2:
-                    self.draw_shape_between_tips(output, hand_tips)
+                    for lm in other_hand:
+                        pt = (int(lm.x * w), int(lm.y * h))
+                        cv2.circle(output, pt, 2, (0, 255, 65), -1)
             else:
-                self.hand_info.config(text="MAOS: 0")
+                self.hand_info.config(text="MAOS: 0 | FOTO: NAO")
+            
+            if three_fingers_down and not self.was_3fingers_down and shape_pts is not None:
+                self.capture_photo_in_shape(img, shape_pts)
+            
+            self.was_3fingers_down = three_fingers_down
+            
+            if self.captured_photo is not None:
+                self.draw_captured_photo(output)
                     
             img_pil = Image.fromarray(cv2.cvtColor(output, cv2.COLOR_BGR2RGB))
             img_tk = ImageTk.PhotoImage(image=img_pil)
@@ -137,24 +202,29 @@ class HandTracker:
             
         self.root.after(30, self.process_frame)
         
-    def draw_shape_between_tips(self, img, hand_tips):
-        hand1_tips = hand_tips[0]
-        hand2_tips = hand_tips[1]
+    def capture_photo_in_shape(self, img, shape_pts):
+        mask = np.zeros(img.shape[:2], dtype=np.uint8)
+        cv2.fillPoly(mask, [shape_pts], 255)
         
-        thumb1 = hand1_tips[0]
-        index1 = hand1_tips[1]
-        thumb2 = hand2_tips[0]
-        index2 = hand2_tips[1]
+        photo = img.copy()
+        photo[mask == 0] = [10, 10, 10]
         
-        if thumb1[0] > thumb2[0]:
-            thumb1, thumb2 = thumb2, thumb1
-            index1, index2 = index2, index1
+        self.captured_photo = photo
+        self.photo_shape_pts = shape_pts.copy()
         
-        pts = [thumb1, index1, index2, thumb2]
-        pts = np.array(pts, np.int32)
-        pts = pts.reshape((-1, 1, 2))
+    def draw_captured_photo(self, img):
+        if self.captured_photo is None or self.photo_shape_pts is None:
+            return
         
-        cv2.polylines(img, [pts], True, (0, 255, 65), 2, cv2.LINE_AA)
+        mask = np.zeros(img.shape[:2], dtype=np.uint8)
+        cv2.fillPoly(mask, [self.photo_shape_pts], 255)
+        
+        photo_resized = cv2.resize(self.captured_photo, (img.shape[1], img.shape[0]))
+        
+        idx = mask > 0
+        img[idx] = photo_resized[idx]
+        
+        cv2.polylines(img, [self.photo_shape_pts], True, (0, 255, 65), 2, cv2.LINE_AA)
         
     def run(self):
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
