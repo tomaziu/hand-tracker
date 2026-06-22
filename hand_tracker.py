@@ -30,6 +30,7 @@ class HandTracker:
         self.photo_shape_pts = None
         self.was_3fingers_down = False
         self.is_grabbing = False
+        self.grab_offset = [0, 0]
         self.photo_pos = [0, 0]
         self.photo_size = (0, 0)
         self.photo_mask = None
@@ -223,9 +224,12 @@ class HandTracker:
             self.was_3fingers_down = three_fingers_down
             
             if self.captured_photo is not None and is_pinching_now and pinch_pos:
+                if not self.is_grabbing:
+                    self.grab_offset[0] = pinch_pos[0] - self.photo_pos[0]
+                    self.grab_offset[1] = pinch_pos[1] - self.photo_pos[1]
                 self.is_grabbing = True
-                self.photo_pos[0] = pinch_pos[0] - self.photo_size[0] // 2
-                self.photo_pos[1] = pinch_pos[1] - self.photo_size[1] // 2
+                self.photo_pos[0] = pinch_pos[0] - self.grab_offset[0]
+                self.photo_pos[1] = pinch_pos[1] - self.grab_offset[1]
             elif not is_pinching_now:
                 self.is_grabbing = False
             
