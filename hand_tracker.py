@@ -1,6 +1,7 @@
 import tkinter as tk
 import cv2
 from PIL import Image, ImageTk
+import mediapipe as mp
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 from mediapipe import Image as MPImage
@@ -153,9 +154,6 @@ class HandTracker:
             
             img = cv2.resize(frame, (canvas_w, canvas_h), interpolation=cv2.INTER_LINEAR)
             h, w, _ = img.shape
-            
-            green = np.zeros_like(img)
-            green[:] = (10, 40, 10)
             
             gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
             output = cv2.merge([gray // 3, gray, gray // 3])
