@@ -29,6 +29,10 @@ class HandTracker:
         self.captured_photo = None
         self.photo_shape_pts = None
         self.was_3fingers_down = False
+        self.is_grabbing = False
+        self.photo_pos = [0, 0]
+        self.photo_size = (0, 0)
+        self.photo_mask = None
         
         self.cap = None
         self.running = False
@@ -102,6 +106,12 @@ class HandTracker:
     def check_3fingers_down(self, lm):
         return self.is_finger_down(lm, 12, 10) and self.is_finger_down(lm, 16, 14) and self.is_finger_down(lm, 20, 18)
         
+    def is_pinching(self, lm, w, h):
+        thumb = (int(lm[4].x * w), int(lm[4].y * h))
+        index = (int(lm[8].x * w), int(lm[8].y * h))
+        dist = ((thumb[0] - index[0])**2 + (thumb[1] - index[1])**2) ** 0.5
+        return dist < 40, ((thumb[0] + index[0]) // 2, (thumb[1] + index[1]) // 2)
+        
     def get_right_hand(self, result):
         if not result.hand_landmarks or len(result.hand_landmarks) < 2:
             return None, None
@@ -160,6 +170,8 @@ class HandTracker:
             
             three_fingers_down = False
             shape_pts = None
+            pinch_pos = None
+            is_pinching_now = False
             
             if result.hand_landmarks:
                 num_hands = len(result.hand_landmarks)
@@ -167,6 +179,11 @@ class HandTracker:
                 
                 for hand_landmarks in result.hand_landmarks:
                     pts = [(int(lm.x * w), int(lm.y * h)) for lm in hand_landmarks]
+                    
+                    pinching, pinch_center = self.is_pinching(hand_landmarks, w, h)
+                    if pinching:
+                        is_pinching_now = True
+                        pinch_pos = pinch_center
                     
                     for start, end in self.HAND_CONNECTIONS:
                         cv2.line(output, pts[start], pts[end], (0, 255, 65), 1, cv2.LINE_AA)
@@ -205,6 +222,13 @@ class HandTracker:
             
             self.was_3fingers_down = three_fingers_down
             
+            if self.captured_photo is not None and is_pinching_now and pinch_pos:
+                self.is_grabbing = True
+                self.photo_pos[0] = pinch_pos[0] - self.photo_size[0] // 2
+                self.photo_pos[1] = pinch_pos[1] - self.photo_size[1] // 2
+            elif not is_pinching_now:
+                self.is_grabbing = False
+            
             if self.captured_photo is not None:
                 self.draw_captured_photo(output)
                     
@@ -223,22 +247,55 @@ class HandTracker:
         photo = img.copy()
         photo[mask == 0] = [10, 10, 10]
         
-        self.captured_photo = photo
-        self.photo_shape_pts = shape_pts.copy()
+        pts_array = shape_pts.reshape(-1, 2)
+        x_min, y_min = pts_array.min(axis=0)
+        x_max, y_max = pts_array.max(axis=0)
+        
+        crop = photo[y_min:y_max, x_min:x_max].copy()
+        
+        self.captured_photo = crop
+        self.photo_size = (x_max - x_min, y_max - y_min)
+        self.photo_pos = [x_min, y_min]
+        self.photo_shape_pts = shape_pts - np.array([x_min, y_min])
         
     def draw_captured_photo(self, img):
-        if self.captured_photo is None or self.photo_shape_pts is None:
+        if self.captured_photo is None:
             return
         
-        mask = np.zeros(img.shape[:2], dtype=np.uint8)
-        cv2.fillPoly(mask, [self.photo_shape_pts], 255)
+        x = int(self.photo_pos[0])
+        y = int(self.photo_pos[1])
+        pw, ph = self.photo_size
         
-        photo_resized = cv2.resize(self.captured_photo, (img.shape[1], img.shape[0]), interpolation=cv2.INTER_NEAREST)
+        h_img, w_img, _ = img.shape
         
-        idx = mask > 0
-        img[idx] = photo_resized[idx]
+        x1 = max(0, x)
+        y1 = max(0, y)
+        x2 = min(w_img, x + pw)
+        y2 = min(h_img, y + ph)
         
-        cv2.polylines(img, [self.photo_shape_pts], True, (0, 255, 65), 2, cv2.LINE_AA)
+        if x2 <= x1 or y2 <= y1:
+            return
+        
+        src_x1 = x1 - x
+        src_y1 = y1 - y
+        src_x2 = src_x1 + (x2 - x1)
+        src_y2 = src_y1 + (y2 - y1)
+        
+        region = self.captured_photo[src_y1:src_y2, src_x1:src_x2]
+        
+        if region.shape[0] > 0 and region.shape[1] > 0:
+            mask = np.zeros(region.shape[:2], dtype=np.uint8)
+            shifted_pts = self.photo_shape_pts - np.array([src_x1, src_y1])
+            cv2.fillPoly(mask, [shifted_pts.astype(np.int32)], 255)
+            
+            idx = mask > 0
+            gray_region = cv2.cvtColor(region, cv2.COLOR_BGR2GRAY)
+            tinted = np.stack([gray_region // 3, gray_region, gray_region // 3], axis=-1).astype(np.uint8)
+            
+            img[y1:y2, x1:x2][idx] = tinted[idx]
+            
+            shifted_shape = self.photo_shape_pts + np.array([x1, y1])
+            cv2.polylines(img, [shifted_shape.astype(np.int32)], True, (0, 255, 65), 2, cv2.LINE_AA)
         
     def run(self):
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
