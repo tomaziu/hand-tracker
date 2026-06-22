@@ -40,6 +40,7 @@ class HandTracker:
         self.circle_active = False
         self.prev_wrist_x = None
         self.circle_particles = []
+        self.open_hand_frames = 0
         
         self.cap = None
         self.running = False
@@ -114,7 +115,7 @@ class HandTracker:
         return self.is_finger_down(lm, 12, 10) and self.is_finger_down(lm, 16, 14) and self.is_finger_down(lm, 20, 18)
         
     def is_hand_open(self, lm):
-        thumb_open = lm[4].x < lm[3].x
+        thumb_open = lm[4].x > lm[3].x
         index_open = lm[8].y < lm[6].y
         middle_open = lm[12].y < lm[10].y
         ring_open = lm[16].y < lm[14].y
@@ -197,7 +198,13 @@ class HandTracker:
                     hand_lm = result.hand_landmarks[0]
                     handedness = result.handedness[0][0].category_name
                     if handedness == "Right" and self.is_hand_open(hand_lm):
-                        single_right_hand = hand_lm
+                        self.open_hand_frames += 1
+                        if self.open_hand_frames >= 5:
+                            single_right_hand = hand_lm
+                    else:
+                        self.open_hand_frames = 0
+                else:
+                    self.open_hand_frames = 0
                 
                 for hand_landmarks in result.hand_landmarks:
                     pts = [(int(lm.x * w), int(lm.y * h)) for lm in hand_landmarks]
