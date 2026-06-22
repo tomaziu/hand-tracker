@@ -98,7 +98,7 @@ class HandTracker:
             return None, None, None
         
         hands_data = []
-        for i, (landmarks, handedness) in enumerate(zip(result.hand_landmarks, result.handednesses)):
+        for i, (landmarks, handedness) in enumerate(zip(result.hand_landmarks, result.handedness)):
             label = handedness[0].category_name
             hands_data.append((i, label, landmarks))
         
