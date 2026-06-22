@@ -161,40 +161,42 @@ class HandTracker:
             three_fingers_down = False
             shape_pts = None
             
-            if result.hand_landmarks and len(result.hand_landmarks) >= 2:
-                right_hand, other_hand = self.get_right_hand(result)
+            if result.hand_landmarks:
+                num_hands = len(result.hand_landmarks)
+                self.hand_info.config(text=f"MAOS: {num_hands} | FPS: {self.fps}")
                 
-                if right_hand and other_hand:
-                    self.hand_info.config(text=f"MAOS: 2 | FPS: {self.fps}")
-                    
-                    right_pts = [(int(lm.x * w), int(lm.y * h)) for lm in right_hand]
-                    other_pts = [(int(lm.x * w), int(lm.y * h)) for lm in other_hand]
-                    
-                    if self.check_3fingers_down(right_hand):
-                        three_fingers_down = True
+                for hand_landmarks in result.hand_landmarks:
+                    pts = [(int(lm.x * w), int(lm.y * h)) for lm in hand_landmarks]
                     
                     for start, end in self.HAND_CONNECTIONS:
-                        cv2.line(output, right_pts[start], right_pts[end], (0, 255, 65), 1, cv2.LINE_AA)
-                        cv2.line(output, other_pts[start], other_pts[end], (0, 255, 65), 1, cv2.LINE_AA)
+                        cv2.line(output, pts[start], pts[end], (0, 255, 65), 1, cv2.LINE_AA)
                     
-                    for pt in right_pts:
+                    for pt in pts:
                         cv2.circle(output, pt, 2, (0, 255, 65), -1)
-                    for pt in other_pts:
-                        cv2.circle(output, pt, 2, (0, 255, 65), -1)
+                
+                if num_hands >= 2:
+                    right_hand, other_hand = self.get_right_hand(result)
                     
-                    thumb_r = right_pts[4]
-                    index_r = right_pts[8]
-                    thumb_o = other_pts[4]
-                    index_o = other_pts[8]
-                    
-                    if thumb_r[0] > thumb_o[0]:
-                        thumb_r, thumb_o = thumb_o, thumb_r
-                        index_r, index_o = index_o, index_r
-                    
-                    shape_pts = np.array([thumb_r, index_r, index_o, thumb_o], np.int32)
-                    shape_pts = shape_pts.reshape((-1, 1, 2))
-                    
-                    cv2.polylines(output, [shape_pts], True, (0, 255, 65), 2, cv2.LINE_AA)
+                    if right_hand and other_hand:
+                        right_pts = [(int(lm.x * w), int(lm.y * h)) for lm in right_hand]
+                        other_pts = [(int(lm.x * w), int(lm.y * h)) for lm in other_hand]
+                        
+                        if self.check_3fingers_down(right_hand):
+                            three_fingers_down = True
+                        
+                        thumb_r = right_pts[4]
+                        index_r = right_pts[8]
+                        thumb_o = other_pts[4]
+                        index_o = other_pts[8]
+                        
+                        if thumb_r[0] > thumb_o[0]:
+                            thumb_r, thumb_o = thumb_o, thumb_r
+                            index_r, index_o = index_o, index_r
+                        
+                        shape_pts = np.array([thumb_r, index_r, index_o, thumb_o], np.int32)
+                        shape_pts = shape_pts.reshape((-1, 1, 2))
+                        
+                        cv2.polylines(output, [shape_pts], True, (0, 255, 65), 2, cv2.LINE_AA)
             else:
                 self.hand_info.config(text=f"MAOS: 0 | FPS: {self.fps}")
             
