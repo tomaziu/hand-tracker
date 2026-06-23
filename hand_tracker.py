@@ -36,6 +36,7 @@ class HandTracker:
         self.photo_mask = None
         self.capture_timer = 0
         self.capture_shape_pts = None
+        self.smooth_pos = [0, 0]
         
         self.cap = None
         self.running = False
@@ -61,7 +62,9 @@ class HandTracker:
         options = vision.HandLandmarkerOptions(
             base_options=base_options,
             num_hands=2,
-            running_mode=vision.RunningMode.VIDEO
+            running_mode=vision.RunningMode.VIDEO,
+            min_detection_confidence=0.7,
+            min_tracking_confidence=0.6
         )
         self.hand_landmarker = vision.HandLandmarker.create_from_options(options)
         
@@ -113,7 +116,9 @@ class HandTracker:
         thumb = (int(lm[4].x * w), int(lm[4].y * h))
         index = (int(lm[8].x * w), int(lm[8].y * h))
         dist = ((thumb[0] - index[0])**2 + (thumb[1] - index[1])**2) ** 0.5
-        return dist < 40, ((thumb[0] + index[0]) // 2, (thumb[1] + index[1]) // 2)
+        mx = thumb[0] * 0.5 + index[0] * 0.5
+        my = thumb[1] * 0.5 + index[1] * 0.5
+        return dist < 50, (int(mx), int(my))
         
     def get_right_hand(self, result):
         if not result.hand_landmarks or len(result.hand_landmarks) < 2:
@@ -245,9 +250,15 @@ class HandTracker:
                 if not self.is_grabbing:
                     self.grab_offset[0] = pinch_pos[0] - self.photo_pos[0]
                     self.grab_offset[1] = pinch_pos[1] - self.photo_pos[1]
+                    self.smooth_pos[0] = pinch_pos[0]
+                    self.smooth_pos[1] = pinch_pos[1]
                 self.is_grabbing = True
-                self.photo_pos[0] = pinch_pos[0] - self.grab_offset[0]
-                self.photo_pos[1] = pinch_pos[1] - self.grab_offset[1]
+                target_x = pinch_pos[0] - self.grab_offset[0]
+                target_y = pinch_pos[1] - self.grab_offset[1]
+                self.smooth_pos[0] = self.smooth_pos[0] * 0.3 + target_x * 0.7
+                self.smooth_pos[1] = self.smooth_pos[1] * 0.3 + target_y * 0.7
+                self.photo_pos[0] = int(self.smooth_pos[0])
+                self.photo_pos[1] = int(self.smooth_pos[1])
             elif not is_pinching_now:
                 self.is_grabbing = False
             
