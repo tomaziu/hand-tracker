@@ -41,6 +41,7 @@ class HandTracker:
         self.prev_wrist_x = None
         self.circle_particles = []
         self.open_hand_frames = 0
+        self.prev_hand_y = None
         
         self.cap = None
         self.running = False
@@ -367,45 +368,82 @@ class HandTracker:
         
         angle_rad = np.radians(self.circle_angle)
         
-        for i in range(8):
-            a = angle_rad + (i * np.pi / 4)
-            r1 = 40
-            r2 = 55
+        for r in [70, 90, 110]:
+            thickness = 1 if r == 110 else 2
+            color = (0, 60, 0) if r == 110 else (0, 255, 65) if r == 90 else (0, 150, 0)
+            cv2.circle(img, (cx, cy), r, color, thickness, cv2.LINE_AA)
+        
+        for i in range(12):
+            a = angle_rad + (i * np.pi / 6)
+            r1 = 60
+            r2 = 80
             pt1 = (int(cx + r1 * np.cos(a)), int(cy + r1 * np.sin(a)))
             pt2 = (int(cx + r2 * np.cos(a)), int(cy + r2 * np.sin(a)))
             cv2.line(img, pt1, pt2, (0, 255, 65), 2, cv2.LINE_AA)
         
-        cv2.circle(img, (cx, cy), 35, (0, 255, 65), 1, cv2.LINE_AA)
-        cv2.circle(img, (cx, cy), 50, (0, 100, 0), 1, cv2.LINE_AA)
+        for i in range(24):
+            a = angle_rad * 0.5 + (i * np.pi / 12)
+            r1 = 85
+            r2 = 100
+            pt1 = (int(cx + r1 * np.cos(a)), int(cy + r1 * np.sin(a)))
+            pt2 = (int(cx + r2 * np.cos(a)), int(cy + r2 * np.sin(a)))
+            cv2.line(img, pt1, pt2, (0, 180, 0), 1, cv2.LINE_AA)
         
-        for i in range(12):
-            a = angle_rad + (i * np.pi / 6)
-            r = 60
+        for i in range(6):
+            a = angle_rad * 2 + (i * np.pi / 3)
+            r = 105
             px = int(cx + r * np.cos(a))
             py = int(cy + r * np.sin(a))
-            self.circle_particles.append([px, py, 1.0])
+            cv2.circle(img, (px, py), 4, (0, 255, 65), -1, cv2.LINE_AA)
+            cv2.circle(img, (px, py), 6, (0, 255, 65), 1, cv2.LINE_AA)
+        
+        for i in range(16):
+            a = angle_rad + (i * np.pi / 8)
+            r = 120
+            px = int(cx + r * np.cos(a))
+            py = int(cy + r * np.sin(a))
+            self.circle_particles.append([px, py, 1.0, np.random.uniform(-1, 1), np.random.uniform(-1, 1)])
         
         alive = []
         for p in self.circle_particles:
-            p[2] -= 0.05
+            p[2] -= 0.03
+            p[0] += p[3]
+            p[1] += p[4]
             if p[2] > 0:
                 alpha = int(p[2] * 255)
-                cv2.circle(img, (int(p[0]), int(p[1])), 2, (0, alpha, 0), -1)
+                size = int(p[2] * 4)
+                cv2.circle(img, (int(p[0]), int(p[1])), size, (0, alpha, 0), -1)
                 alive.append(p)
-        self.circle_particles = alive[-50:]
+        self.circle_particles = alive[-80:]
         
-        numbers = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "A", "B"]
-        for i, num in enumerate(numbers):
-            a = angle_rad + (i * np.pi / 6)
-            r = 70
+        runes = ["\u16A0", "\u16A2", "\u16A6", "\u16A8", "\u16B1", "\u16B7", "\u16B9", "\u16BA", "\u16BE", "\u16C1", "\u16C3", "\u16C7"]
+        for i, rune in enumerate(runes):
+            a = angle_rad * 0.3 + (i * np.pi / 6)
+            r = 130
             nx = int(cx + r * np.cos(a))
             ny = int(cy + r * np.sin(a))
-            cv2.putText(img, num, (nx - 5, ny + 5), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 200, 0), 1, cv2.LINE_AA)
+            cv2.putText(img, str(i), (nx - 5, ny + 5), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 220, 0), 1, cv2.LINE_AA)
         
-        arc_len = 60
         for i in range(3):
-            a_start = int(self.circle_angle + i * 40)
-            cv2.ellipse(img, (cx, cy), (45, 45), 0, a_start, a_start + arc_len, (0, 255, 65), 1, cv2.LINE_AA)
+            a_start = int(self.circle_angle + i * 50)
+            cv2.ellipse(img, (cx, cy), (75, 75), 0, a_start, a_start + 40, (0, 255, 65), 2, cv2.LINE_AA)
+            cv2.ellipse(img, (cx, cy), (95, 95), 0, a_start + 25, a_start + 55, (0, 180, 0), 1, cv2.LINE_AA)
+        
+        inner_pts = []
+        for i in range(6):
+            a = angle_rad * -1 + (i * np.pi / 3)
+            r = 45
+            inner_pts.append((int(cx + r * np.cos(a)), int(cy + r * np.sin(a))))
+        inner_arr = np.array(inner_pts, np.int32)
+        cv2.polylines(img, [inner_arr], True, (0, 255, 65), 1, cv2.LINE_AA)
+        
+        for i in range(6):
+            a1 = angle_rad * -1 + (i * np.pi / 3)
+            a2 = angle_rad * -1 + ((i + 2) * np.pi / 3)
+            r = 45
+            pt1 = (int(cx + r * np.cos(a1)), int(cy + r * np.sin(a1)))
+            pt2 = (int(cx + r * np.cos(a2)), int(cy + r * np.sin(a2)))
+            cv2.line(img, pt1, pt2, (0, 200, 0), 1, cv2.LINE_AA)
         
     def run(self):
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
