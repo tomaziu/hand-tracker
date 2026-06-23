@@ -236,9 +236,8 @@ class HandTracker:
                     self.capture_shape_pts = None
                 elif self.capture_shape_pts is not None:
                     remaining = 0.5 - elapsed
-                    cv2.putText(output, f"TIRANDO FOTO: {remaining:.1f}s", (w // 2 - 100, 40), 
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 65), 2, cv2.LINE_AA)
-                    cv2.rectangle(output, (w // 2 - 100, 50), (w // 2 - 100 + int(200 * elapsed / 0.5), 55), (0, 255, 65), -1)
+                    cv2.putText(output, f"{remaining:.1f}", (w // 2 - 15, 35), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 65), 1, cv2.LINE_AA)
             
             self.was_3fingers_down = three_fingers_down
             
