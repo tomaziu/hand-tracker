@@ -36,12 +36,6 @@ class HandTracker:
         self.photo_mask = None
         self.capture_timer = 0
         self.capture_shape_pts = None
-        self.circle_angle = 0
-        self.circle_active = False
-        self.prev_wrist_x = None
-        self.circle_particles = []
-        self.open_hand_frames = 0
-        self.prev_hand_y = None
         
         self.cap = None
         self.running = False
@@ -115,14 +109,6 @@ class HandTracker:
     def check_3fingers_down(self, lm):
         return self.is_finger_down(lm, 12, 10) and self.is_finger_down(lm, 16, 14) and self.is_finger_down(lm, 20, 18)
         
-    def is_hand_open(self, lm):
-        thumb_open = lm[4].x > lm[3].x
-        index_open = lm[8].y < lm[6].y
-        middle_open = lm[12].y < lm[10].y
-        ring_open = lm[16].y < lm[14].y
-        pinky_open = lm[20].y < lm[18].y
-        return thumb_open and index_open and middle_open and ring_open and pinky_open
-        
     def is_pinching(self, lm, w, h):
         thumb = (int(lm[4].x * w), int(lm[4].y * h))
         index = (int(lm[8].x * w), int(lm[8].y * h))
@@ -189,23 +175,10 @@ class HandTracker:
             shape_pts = None
             pinch_pos = None
             is_pinching_now = False
-            single_right_hand = None
             
             if result.hand_landmarks:
                 num_hands = len(result.hand_landmarks)
                 self.hand_info.config(text=f"MAOS: {num_hands} | FPS: {self.fps}")
-                
-                if num_hands == 1:
-                    hand_lm = result.hand_landmarks[0]
-                    handedness = result.handedness[0][0].category_name
-                    if handedness == "Right" and self.is_hand_open(hand_lm):
-                        self.open_hand_frames += 1
-                        if self.open_hand_frames >= 5:
-                            single_right_hand = hand_lm
-                    else:
-                        self.open_hand_frames = 0
-                else:
-                    self.open_hand_frames = 0
                 
                 for hand_landmarks in result.hand_landmarks:
                     pts = [(int(lm.x * w), int(lm.y * h)) for lm in hand_landmarks]
@@ -283,19 +256,6 @@ class HandTracker:
             
             if self.captured_photo is not None:
                 self.draw_captured_photo(output)
-            
-            if single_right_hand is not None:
-                self.circle_active = True
-                wrist_x = single_right_hand[0].x
-                if self.prev_wrist_x is not None:
-                    delta = wrist_x - self.prev_wrist_x
-                    self.circle_angle += delta * 500
-                self.prev_wrist_x = wrist_x
-                self.draw_cool_circle(output, single_right_hand, w, h)
-            else:
-                self.circle_active = False
-                self.prev_wrist_x = None
-                self.circle_particles.clear()
                     
             img_pil = Image.fromarray(cv2.cvtColor(output, cv2.COLOR_BGR2RGB))
             img_tk = ImageTk.PhotoImage(image=img_pil)
@@ -358,92 +318,6 @@ class HandTracker:
             tinted = np.stack([gray_region // 3, gray_region, gray_region // 3], axis=-1).astype(np.uint8)
             
             img[y1:y2, x1:x2][idx] = tinted[idx]
-            
-            shifted_shape = self.photo_shape_pts + np.array([x1, y1])
-            cv2.polylines(img, [shifted_shape.astype(np.int32)], True, (0, 255, 65), 2, cv2.LINE_AA)
-        
-    def draw_cool_circle(self, img, hand_landmarks, w, h):
-        cx = int(hand_landmarks[9].x * w)
-        cy = int(hand_landmarks[9].y * h)
-        
-        angle_rad = np.radians(self.circle_angle)
-        
-        for r in [70, 90, 110]:
-            thickness = 1 if r == 110 else 2
-            color = (0, 60, 0) if r == 110 else (0, 255, 65) if r == 90 else (0, 150, 0)
-            cv2.circle(img, (cx, cy), r, color, thickness, cv2.LINE_AA)
-        
-        for i in range(12):
-            a = angle_rad + (i * np.pi / 6)
-            r1 = 60
-            r2 = 80
-            pt1 = (int(cx + r1 * np.cos(a)), int(cy + r1 * np.sin(a)))
-            pt2 = (int(cx + r2 * np.cos(a)), int(cy + r2 * np.sin(a)))
-            cv2.line(img, pt1, pt2, (0, 255, 65), 2, cv2.LINE_AA)
-        
-        for i in range(24):
-            a = angle_rad * 0.5 + (i * np.pi / 12)
-            r1 = 85
-            r2 = 100
-            pt1 = (int(cx + r1 * np.cos(a)), int(cy + r1 * np.sin(a)))
-            pt2 = (int(cx + r2 * np.cos(a)), int(cy + r2 * np.sin(a)))
-            cv2.line(img, pt1, pt2, (0, 180, 0), 1, cv2.LINE_AA)
-        
-        for i in range(6):
-            a = angle_rad * 2 + (i * np.pi / 3)
-            r = 105
-            px = int(cx + r * np.cos(a))
-            py = int(cy + r * np.sin(a))
-            cv2.circle(img, (px, py), 4, (0, 255, 65), -1, cv2.LINE_AA)
-            cv2.circle(img, (px, py), 6, (0, 255, 65), 1, cv2.LINE_AA)
-        
-        for i in range(16):
-            a = angle_rad + (i * np.pi / 8)
-            r = 120
-            px = int(cx + r * np.cos(a))
-            py = int(cy + r * np.sin(a))
-            self.circle_particles.append([px, py, 1.0, np.random.uniform(-1, 1), np.random.uniform(-1, 1)])
-        
-        alive = []
-        for p in self.circle_particles:
-            p[2] -= 0.03
-            p[0] += p[3]
-            p[1] += p[4]
-            if p[2] > 0:
-                alpha = int(p[2] * 255)
-                size = int(p[2] * 4)
-                cv2.circle(img, (int(p[0]), int(p[1])), size, (0, alpha, 0), -1)
-                alive.append(p)
-        self.circle_particles = alive[-80:]
-        
-        runes = ["\u16A0", "\u16A2", "\u16A6", "\u16A8", "\u16B1", "\u16B7", "\u16B9", "\u16BA", "\u16BE", "\u16C1", "\u16C3", "\u16C7"]
-        for i, rune in enumerate(runes):
-            a = angle_rad * 0.3 + (i * np.pi / 6)
-            r = 130
-            nx = int(cx + r * np.cos(a))
-            ny = int(cy + r * np.sin(a))
-            cv2.putText(img, str(i), (nx - 5, ny + 5), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 220, 0), 1, cv2.LINE_AA)
-        
-        for i in range(3):
-            a_start = int(self.circle_angle + i * 50)
-            cv2.ellipse(img, (cx, cy), (75, 75), 0, a_start, a_start + 40, (0, 255, 65), 2, cv2.LINE_AA)
-            cv2.ellipse(img, (cx, cy), (95, 95), 0, a_start + 25, a_start + 55, (0, 180, 0), 1, cv2.LINE_AA)
-        
-        inner_pts = []
-        for i in range(6):
-            a = angle_rad * -1 + (i * np.pi / 3)
-            r = 45
-            inner_pts.append((int(cx + r * np.cos(a)), int(cy + r * np.sin(a))))
-        inner_arr = np.array(inner_pts, np.int32)
-        cv2.polylines(img, [inner_arr], True, (0, 255, 65), 1, cv2.LINE_AA)
-        
-        for i in range(6):
-            a1 = angle_rad * -1 + (i * np.pi / 3)
-            a2 = angle_rad * -1 + ((i + 2) * np.pi / 3)
-            r = 45
-            pt1 = (int(cx + r * np.cos(a1)), int(cy + r * np.sin(a1)))
-            pt2 = (int(cx + r * np.cos(a2)), int(cy + r * np.sin(a2)))
-            cv2.line(img, pt1, pt2, (0, 200, 0), 1, cv2.LINE_AA)
         
     def run(self):
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
