@@ -230,17 +230,15 @@ class HandTracker:
             
             if self.capture_timer > 0 and self.capture_shape_pts is not None:
                 elapsed = time.time() - self.capture_timer
-                if elapsed >= 1.0:
+                if elapsed >= 0.5:
                     self.capture_photo_in_shape(img, self.capture_shape_pts)
                     self.capture_timer = 0
                     self.capture_shape_pts = None
                 elif self.capture_shape_pts is not None:
-                    progress = elapsed / 1.0
-                    center = self.capture_shape_pts.reshape(-1, 2).mean(axis=0).astype(int)
-                    radius = int(20 + 20 * progress)
-                    cv2.circle(output, tuple(center), radius, (0, 255, 65), 2, cv2.LINE_AA)
-                    cv2.putText(output, f"{1.0 - elapsed:.1f}", (center[0] - 10, center[1] + 5), 
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 65), 1)
+                    remaining = 0.5 - elapsed
+                    cv2.putText(output, f"TIRANDO FOTO: {remaining:.1f}s", (w // 2 - 100, 40), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 65), 2, cv2.LINE_AA)
+                    cv2.rectangle(output, (w // 2 - 100, 50), (w // 2 - 100 + int(200 * elapsed / 0.5), 55), (0, 255, 65), -1)
             
             self.was_3fingers_down = three_fingers_down
             
