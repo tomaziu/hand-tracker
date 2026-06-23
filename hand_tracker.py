@@ -110,18 +110,18 @@ class HandTracker:
         return self.is_finger_down(lm, 12, 10) and self.is_finger_down(lm, 16, 14) and self.is_finger_down(lm, 20, 18)
         
     def is_pinching(self, lm, w, h):
+        thumb = (int(lm[4].x * w), int(lm[4].y * h))
         index = (int(lm[8].x * w), int(lm[8].y * h))
         middle = (int(lm[12].x * w), int(lm[12].y * h))
-        thumb_tip = (int(lm[4].x * w), int(lm[4].y * h))
-        thumb_ip = (int(lm[3].x * w), int(lm[3].y * h))
         
-        thumb_open = thumb_tip[0] > thumb_ip[0]
+        dist_ti = ((thumb[0] - index[0])**2 + (thumb[1] - index[1])**2) ** 0.5
+        dist_im = ((index[0] - middle[0])**2 + (index[1] - middle[1])**2) ** 0.5
         
-        dist = ((index[0] - middle[0])**2 + (index[1] - middle[1])**2) ** 0.5
+        if dist_ti < 40:
+            return True, ((thumb[0] + index[0]) // 2, (thumb[1] + index[1]) // 2)
         
-        if dist < 50 and thumb_open:
-            center = ((index[0] + middle[0]) // 2, (index[1] + middle[1]) // 2)
-            return True, center
+        if dist_im < 40:
+            return True, ((index[0] + middle[0]) // 2, (index[1] + middle[1]) // 2)
         
         return False, (0, 0)
         
