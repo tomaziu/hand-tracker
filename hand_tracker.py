@@ -339,7 +339,7 @@ class HandTracker:
     def draw_trash_bin(self, img):
         h, w, _ = img.shape
         bx = 50
-        by = h - 100
+        by = 50
         bw = 60
         bh = 80
         
