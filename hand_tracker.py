@@ -38,6 +38,11 @@ class HandTracker:
         self.flash_effect = 0
         self.flash_particles = []
         
+        self.is_zooming = False
+        self.zoom_photo_idx = -1
+        self.zoom_initial_dist = 0
+        self.zoom_initial_scale = 1.0
+        
         self.cap = None
         self.running = False
         self.hand_landmarker = None
@@ -187,6 +192,8 @@ class HandTracker:
             shape_pts = None
             pinch_pos = None
             is_pinching_now = False
+            two_pinches = False
+            pinch_positions = []
             
             if result.hand_landmarks:
                 num_hands = len(result.hand_landmarks)
@@ -199,12 +206,16 @@ class HandTracker:
                     if pinching:
                         is_pinching_now = True
                         pinch_pos = pinch_center
+                        pinch_positions.append(pinch_center)
                     
                     for start, end in self.HAND_CONNECTIONS:
                         cv2.line(output, pts[start], pts[end], (0, 255, 65), 1, cv2.LINE_AA)
                     
                     for pt in pts:
                         cv2.circle(output, pt, 2, (0, 255, 65), -1)
+                
+                if len(pinch_positions) == 2:
+                    two_pinches = True
                 
                 if num_hands >= 2:
                     right_hand, other_hand = self.get_right_hand(result)
@@ -264,28 +275,53 @@ class HandTracker:
             self.was_3fingers_down = three_fingers_down
             
             if is_pinching_now and pinch_pos:
-                if not self.is_grabbing:
-                    idx = self.find_photo_at_pos(pinch_pos[0], pinch_pos[1])
-                    if idx >= 0:
-                        self.grabbed_photo_idx = idx
-                        photo = self.photos[idx]
-                        self.grab_offset[0] = pinch_pos[0] - photo['pos'][0]
-                        self.grab_offset[1] = pinch_pos[1] - photo['pos'][1]
-                        self.smooth_pos[0] = pinch_pos[0]
-                        self.smooth_pos[1] = pinch_pos[1]
-                        self.is_grabbing = True
-                
-                if self.is_grabbing and self.grabbed_photo_idx >= 0:
-                    photo = self.photos[self.grabbed_photo_idx]
-                    target_x = pinch_pos[0] - self.grab_offset[0]
-                    target_y = pinch_pos[1] - self.grab_offset[1]
-                    self.smooth_pos[0] = self.smooth_pos[0] * 0.3 + target_x * 0.7
-                    self.smooth_pos[1] = self.smooth_pos[1] * 0.3 + target_y * 0.7
-                    photo['pos'][0] = int(self.smooth_pos[0])
-                    photo['pos'][1] = int(self.smooth_pos[1])
+                if two_pinches:
+                    cx = (pinch_positions[0][0] + pinch_positions[1][0]) // 2
+                    cy = (pinch_positions[0][1] + pinch_positions[1][1]) // 2
+                    dist = ((pinch_positions[0][0] - pinch_positions[1][0])**2 + 
+                            (pinch_positions[0][1] - pinch_positions[1][1])**2) ** 0.5
+                    
+                    if not self.is_zooming:
+                        idx = self.find_photo_at_pos(cx, cy)
+                        if idx >= 0:
+                            self.is_zooming = True
+                            self.zoom_photo_idx = idx
+                            self.zoom_initial_dist = dist
+                            self.zoom_initial_scale = self.photos[idx].get('scale', 1.0)
+                    else:
+                        if self.zoom_photo_idx >= 0 and self.zoom_initial_dist > 0:
+                            ratio = dist / self.zoom_initial_dist
+                            new_scale = self.zoom_initial_scale * ratio
+                            new_scale = max(0.3, min(3.0, new_scale))
+                            photo = self.photos[self.zoom_photo_idx]
+                            old_w, old_h = photo['image'].shape[1], photo['image'].shape[0]
+                            photo['scale'] = new_scale
+                            photo['size'] = (int(old_w * new_scale), int(old_h * new_scale))
+                else:
+                    if not self.is_grabbing:
+                        idx = self.find_photo_at_pos(pinch_pos[0], pinch_pos[1])
+                        if idx >= 0:
+                            self.grabbed_photo_idx = idx
+                            photo = self.photos[idx]
+                            self.grab_offset[0] = pinch_pos[0] - photo['pos'][0]
+                            self.grab_offset[1] = pinch_pos[1] - photo['pos'][1]
+                            self.smooth_pos[0] = pinch_pos[0]
+                            self.smooth_pos[1] = pinch_pos[1]
+                            self.is_grabbing = True
+                    
+                    if self.is_grabbing and self.grabbed_photo_idx >= 0:
+                        photo = self.photos[self.grabbed_photo_idx]
+                        target_x = pinch_pos[0] - self.grab_offset[0]
+                        target_y = pinch_pos[1] - self.grab_offset[1]
+                        self.smooth_pos[0] = self.smooth_pos[0] * 0.3 + target_x * 0.7
+                        self.smooth_pos[1] = self.smooth_pos[1] * 0.3 + target_y * 0.7
+                        photo['pos'][0] = int(self.smooth_pos[0])
+                        photo['pos'][1] = int(self.smooth_pos[1])
             elif not is_pinching_now:
                 self.is_grabbing = False
                 self.grabbed_photo_idx = -1
+                self.is_zooming = False
+                self.zoom_photo_idx = -1
             
             if self.flash_effect > 0:
                 overlay = output.copy()
@@ -332,7 +368,8 @@ class HandTracker:
             'image': crop,
             'shape_pts': shape_pts - np.array([x_min, y_min]),
             'pos': [int(x_min), int(y_min)],
-            'size': (int(x_max - x_min), int(y_max - y_min))
+            'size': (int(x_max - x_min), int(y_max - y_min)),
+            'scale': 1.0
         }
         
         self.photos.append(new_photo)
@@ -341,13 +378,26 @@ class HandTracker:
         x = int(photo['pos'][0])
         y = int(photo['pos'][1])
         pw, ph = photo['size']
+        scale = photo.get('scale', 1.0)
         
         h_img, w_img, _ = img.shape
         
+        if scale != 1.0:
+            orig_h, orig_w = photo['image'].shape[:2]
+            new_w = int(orig_w * scale)
+            new_h = int(orig_h * scale)
+            resized = cv2.resize(photo['image'], (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+            resized_shape = (photo['shape_pts'] * scale).astype(np.int32)
+        else:
+            resized = photo['image']
+            resized_shape = photo['shape_pts'].astype(np.int32)
+        
+        rw, rh = resized.shape[1], resized.shape[0]
+        
         x1 = max(0, x)
         y1 = max(0, y)
-        x2 = min(w_img, x + pw)
-        y2 = min(h_img, y + ph)
+        x2 = min(w_img, x + rw)
+        y2 = min(h_img, y + rh)
         
         if x2 <= x1 or y2 <= y1:
             return
@@ -357,12 +407,12 @@ class HandTracker:
         src_x2 = src_x1 + (x2 - x1)
         src_y2 = src_y1 + (y2 - y1)
         
-        region = photo['image'][src_y1:src_y2, src_x1:src_x2]
+        region = resized[src_y1:src_y2, src_x1:src_x2]
         
         if region.shape[0] > 0 and region.shape[1] > 0:
             mask = np.zeros(region.shape[:2], dtype=np.uint8)
-            shifted_pts = photo['shape_pts'] - np.array([src_x1, src_y1])
-            cv2.fillPoly(mask, [shifted_pts.astype(np.int32)], 255)
+            shifted_pts = resized_shape - np.array([src_x1, src_y1])
+            cv2.fillPoly(mask, [shifted_pts], 255)
             
             idx = mask > 0
             gray_region = cv2.cvtColor(region, cv2.COLOR_BGR2GRAY)
