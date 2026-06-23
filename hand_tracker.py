@@ -37,6 +37,7 @@ class HandTracker:
         self.capture_timer = 0
         self.capture_shape_pts = None
         self.smooth_pos = [0, 0]
+        self.trash_zone = None
         
         self.cap = None
         self.running = False
@@ -257,10 +258,20 @@ class HandTracker:
                 self.smooth_pos[1] = self.smooth_pos[1] * 0.3 + target_y * 0.7
                 self.photo_pos[0] = int(self.smooth_pos[0])
                 self.photo_pos[1] = int(self.smooth_pos[1])
-            elif not is_pinching_now:
+            elif not is_pinching_now and self.is_grabbing:
+                if self.captured_photo is not None and self.trash_zone is not None:
+                    tx1, ty1, tx2, ty2 = self.trash_zone
+                    px = self.photo_pos[0] + self.photo_size[0] // 2
+                    py = self.photo_pos[1] + self.photo_size[1] // 2
+                    if tx1 <= px <= tx2 and ty1 <= py <= ty2:
+                        self.captured_photo = None
+                        self.photo_shape_pts = None
+                        self.photo_size = (0, 0)
+                        self.photo_pos = [0, 0]
                 self.is_grabbing = False
             
             if self.captured_photo is not None:
+                self.draw_trash_bin(output)
                 self.draw_captured_photo(output)
                     
             img_pil = Image.fromarray(cv2.cvtColor(output, cv2.COLOR_BGR2RGB))
@@ -324,6 +335,35 @@ class HandTracker:
             tinted = np.stack([gray_region // 3, gray_region, gray_region // 3], axis=-1).astype(np.uint8)
             
             img[y1:y2, x1:x2][idx] = tinted[idx]
+        
+    def draw_trash_bin(self, img):
+        h, w, _ = img.shape
+        bx = 50
+        by = h - 100
+        bw = 60
+        bh = 80
+        
+        self.trash_zone = (bx, by, bx + bw, by + bh)
+        
+        in_trash = False
+        if self.is_grabbing:
+            px = self.photo_pos[0] + self.photo_size[0] // 2
+            py = self.photo_pos[1] + self.photo_size[1] // 2
+            if bx <= px <= bx + bw and by <= py <= by + bh:
+                in_trash = True
+        
+        color = (0, 100, 255) if in_trash else (0, 80, 0)
+        thickness = 2 if in_trash else 1
+        
+        cv2.rectangle(img, (bx + 10, by), (bx + bw - 10, by + bh - 15), color, thickness, cv2.LINE_AA)
+        
+        cv2.line(img, (bx + 8, by - 5), (bx + bw - 8, by - 5), color, thickness, cv2.LINE_AA)
+        
+        cv2.line(img, (bx + 25, by - 12), (bx + 35, by - 12), color, 1, cv2.LINE_AA)
+        
+        for i in range(3):
+            lx = bx + 22 + i * 8
+            cv2.line(img, (lx, by + 10), (lx, by + bh - 25), color, 1, cv2.LINE_AA)
         
     def run(self):
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
