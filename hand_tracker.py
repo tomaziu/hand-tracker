@@ -34,6 +34,10 @@ class HandTracker:
         self.capture_timer = 0
         self.capture_shape_pts = None
         self.smooth_pos = [0, 0]
+        self.prev_wrist_angle = None
+        
+        self.flash_effect = 0
+        self.flash_particles = []
         
         self.cap = None
         self.running = False
@@ -115,6 +119,12 @@ class HandTracker:
         my = thumb[1] * 0.5 + index[1] * 0.5
         return dist < 50, (int(mx), int(my))
         
+    def get_wrist_angle(self, lm, w, h):
+        wrist = (lm[0].x * w, lm[0].y * h)
+        middle = (lm[9].x * w, lm[9].y * h)
+        angle = np.arctan2(middle[1] - wrist[1], middle[0] - wrist[0])
+        return np.degrees(angle)
+        
     def get_right_hand(self, result):
         if not result.hand_landmarks or len(result.hand_landmarks) < 2:
             return None, None
@@ -184,6 +194,7 @@ class HandTracker:
             shape_pts = None
             pinch_pos = None
             is_pinching_now = False
+            wrist_angle = None
             
             if result.hand_landmarks:
                 num_hands = len(result.hand_landmarks)
@@ -196,6 +207,8 @@ class HandTracker:
                     if pinching:
                         is_pinching_now = True
                         pinch_pos = pinch_center
+                    
+                    wrist_angle = self.get_wrist_angle(hand_landmarks, w, h)
                     
                     for start, end in self.HAND_CONNECTIONS:
                         cv2.line(output, pts[start], pts[end], (0, 255, 65), 1, cv2.LINE_AA)
@@ -243,6 +256,16 @@ class HandTracker:
                     self.add_photo(img, self.capture_shape_pts)
                     self.capture_timer = 0
                     self.capture_shape_pts = None
+                    self.flash_effect = 1.0
+                    for _ in range(20):
+                        self.flash_particles.append({
+                            'x': np.random.randint(0, w),
+                            'y': np.random.randint(0, h),
+                            'vx': np.random.uniform(-3, 3),
+                            'vy': np.random.uniform(-3, 3),
+                            'life': 1.0,
+                            'size': np.random.randint(2, 6)
+                        })
                 elif self.capture_shape_pts is not None:
                     remaining = 0.5 - elapsed
                     cv2.putText(output, f"{remaining:.1f}", (w // 2 - 15, 35), 
@@ -260,6 +283,7 @@ class HandTracker:
                         self.grab_offset[1] = pinch_pos[1] - photo['pos'][1]
                         self.smooth_pos[0] = pinch_pos[0]
                         self.smooth_pos[1] = pinch_pos[1]
+                        self.prev_wrist_angle = wrist_angle
                         self.is_grabbing = True
                 
                 if self.is_grabbing and self.grabbed_photo_idx >= 0:
@@ -270,9 +294,36 @@ class HandTracker:
                     self.smooth_pos[1] = self.smooth_pos[1] * 0.3 + target_y * 0.7
                     photo['pos'][0] = int(self.smooth_pos[0])
                     photo['pos'][1] = int(self.smooth_pos[1])
+                    
+                    if wrist_angle is not None and self.prev_wrist_angle is not None:
+                        delta = wrist_angle - self.prev_wrist_angle
+                        if delta > 180:
+                            delta -= 360
+                        elif delta < -180:
+                            delta += 360
+                        photo['rotation'] = photo.get('rotation', 0) + delta * 0.5
+                    self.prev_wrist_angle = wrist_angle
             elif not is_pinching_now:
                 self.is_grabbing = False
                 self.grabbed_photo_idx = -1
+                self.prev_wrist_angle = None
+            
+            if self.flash_effect > 0:
+                overlay = output.copy()
+                cv2.rectangle(overlay, (0, 0), (w, h), (255, 255, 255), -1)
+                cv2.addWeighted(overlay, self.flash_effect * 0.5, output, 1 - self.flash_effect * 0.5, 0, output)
+                self.flash_effect -= 0.05
+            
+            alive = []
+            for p in self.flash_particles:
+                p['x'] += p['vx']
+                p['y'] += p['vy']
+                p['life'] -= 0.03
+                if p['life'] > 0:
+                    alpha = int(p['life'] * 255)
+                    cv2.circle(output, (int(p['x']), int(p['y'])), p['size'], (alpha, alpha, alpha), -1)
+                    alive.append(p)
+            self.flash_particles = alive
             
             for photo in self.photos:
                 self.draw_photo(output, photo)
@@ -302,7 +353,8 @@ class HandTracker:
             'image': crop,
             'shape_pts': shape_pts - np.array([x_min, y_min]),
             'pos': [int(x_min), int(y_min)],
-            'size': (int(x_max - x_min), int(y_max - y_min))
+            'size': (int(x_max - x_min), int(y_max - y_min)),
+            'rotation': 0
         }
         
         self.photos.append(new_photo)
@@ -311,34 +363,89 @@ class HandTracker:
         x = int(photo['pos'][0])
         y = int(photo['pos'][1])
         pw, ph = photo['size']
+        rotation = photo.get('rotation', 0)
         
-        h_img, w_img, _ = img.shape
-        
-        x1 = max(0, x)
-        y1 = max(0, y)
-        x2 = min(w_img, x + pw)
-        y2 = min(h_img, y + ph)
-        
-        if x2 <= x1 or y2 <= y1:
-            return
-        
-        src_x1 = x1 - x
-        src_y1 = y1 - y
-        src_x2 = src_x1 + (x2 - x1)
-        src_y2 = src_y1 + (y2 - y1)
-        
-        region = photo['image'][src_y1:src_y2, src_x1:src_x2]
-        
-        if region.shape[0] > 0 and region.shape[1] > 0:
-            mask = np.zeros(region.shape[:2], dtype=np.uint8)
-            shifted_pts = photo['shape_pts'] - np.array([src_x1, src_y1])
-            cv2.fillPoly(mask, [shifted_pts.astype(np.int32)], 255)
+        if rotation != 0:
+            center = (pw // 2, ph // 2)
+            mat = cv2.getRotationMatrix2D(center, rotation, 1.0)
             
-            idx = mask > 0
-            gray_region = cv2.cvtColor(region, cv2.COLOR_BGR2GRAY)
-            tinted = np.stack([gray_region // 3, gray_region, gray_region // 3], axis=-1).astype(np.uint8)
+            cos = np.abs(mat[0, 0])
+            sin = np.abs(mat[0, 1])
+            new_w = int(ph * sin + pw * cos)
+            new_h = int(ph * cos + pw * sin)
             
-            img[y1:y2, x1:x2][idx] = tinted[idx]
+            mat[0, 2] += (new_w - pw) // 2
+            mat[1, 2] += (new_h - ph) // 2
+            
+            rotated = cv2.warpAffine(photo['image'], mat, (new_w, new_h), borderValue=(10, 10, 10))
+            
+            rotated_mask = cv2.warpAffine(
+                np.ones((ph, pw), dtype=np.uint8) * 255, mat, (new_w, new_h), borderValue=0
+            )
+            
+            rotated_shape = cv2.transform(photo['shape_pts'].reshape(-1, 1, 2).astype(np.float32), mat)
+            rotated_shape = rotated_shape.astype(np.int32)
+            
+            draw_x = x - (new_w - pw) // 2
+            draw_y = y - (new_h - ph) // 2
+            
+            h_img, w_img, _ = img.shape
+            
+            x1 = max(0, draw_x)
+            y1 = max(0, draw_y)
+            x2 = min(w_img, draw_x + new_w)
+            y2 = min(h_img, draw_y + new_h)
+            
+            if x2 <= x1 or y2 <= y1:
+                return
+            
+            sx1 = x1 - draw_x
+            sy1 = y1 - draw_y
+            sx2 = sx1 + (x2 - x1)
+            sy2 = sy1 + (y2 - y1)
+            
+            region = rotated[sy1:sy2, sx1:sx2]
+            region_mask = rotated_mask[sy1:sy2, sx1:sx2]
+            shifted_shape = rotated_shape - np.array([sx1, sy1])
+            
+            if region.shape[0] > 0 and region.shape[1] > 0:
+                mask = np.zeros(region.shape[:2], dtype=np.uint8)
+                cv2.fillPoly(mask, [shifted_shape], 255)
+                mask = cv2.bitwise_and(mask, region_mask)
+                
+                idx = mask > 0
+                gray_region = cv2.cvtColor(region, cv2.COLOR_BGR2GRAY)
+                tinted = np.stack([gray_region // 3, gray_region, gray_region // 3], axis=-1).astype(np.uint8)
+                
+                img[y1:y2, x1:x2][idx] = tinted[idx]
+        else:
+            h_img, w_img, _ = img.shape
+            
+            x1 = max(0, x)
+            y1 = max(0, y)
+            x2 = min(w_img, x + pw)
+            y2 = min(h_img, y + ph)
+            
+            if x2 <= x1 or y2 <= y1:
+                return
+            
+            src_x1 = x1 - x
+            src_y1 = y1 - y
+            src_x2 = src_x1 + (x2 - x1)
+            src_y2 = src_y1 + (y2 - y1)
+            
+            region = photo['image'][src_y1:src_y2, src_x1:src_x2]
+            
+            if region.shape[0] > 0 and region.shape[1] > 0:
+                mask = np.zeros(region.shape[:2], dtype=np.uint8)
+                shifted_pts = photo['shape_pts'] - np.array([src_x1, src_y1])
+                cv2.fillPoly(mask, [shifted_pts.astype(np.int32)], 255)
+                
+                idx = mask > 0
+                gray_region = cv2.cvtColor(region, cv2.COLOR_BGR2GRAY)
+                tinted = np.stack([gray_region // 3, gray_region, gray_region // 3], axis=-1).astype(np.uint8)
+                
+                img[y1:y2, x1:x2][idx] = tinted[idx]
         
     def run(self):
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
