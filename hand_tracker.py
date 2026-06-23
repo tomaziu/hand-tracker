@@ -112,18 +112,8 @@ class HandTracker:
     def is_pinching(self, lm, w, h):
         thumb = (int(lm[4].x * w), int(lm[4].y * h))
         index = (int(lm[8].x * w), int(lm[8].y * h))
-        middle = (int(lm[12].x * w), int(lm[12].y * h))
-        
-        dist_ti = ((thumb[0] - index[0])**2 + (thumb[1] - index[1])**2) ** 0.5
-        dist_im = ((index[0] - middle[0])**2 + (index[1] - middle[1])**2) ** 0.5
-        
-        if dist_ti < 40:
-            return True, ((thumb[0] + index[0]) // 2, (thumb[1] + index[1]) // 2)
-        
-        if dist_im < 40:
-            return True, ((index[0] + middle[0]) // 2, (index[1] + middle[1]) // 2)
-        
-        return False, (0, 0)
+        dist = ((thumb[0] - index[0])**2 + (thumb[1] - index[1])**2) ** 0.5
+        return dist < 40, ((thumb[0] + index[0]) // 2, (thumb[1] + index[1]) // 2)
         
     def get_right_hand(self, result):
         if not result.hand_landmarks or len(result.hand_landmarks) < 2:
