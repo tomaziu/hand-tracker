@@ -63,8 +63,8 @@ class HandTracker:
             base_options=base_options,
             num_hands=2,
             running_mode=vision.RunningMode.VIDEO,
-            min_detection_confidence=0.7,
-            min_tracking_confidence=0.6
+            min_hand_detection_confidence=0.7,
+            min_hand_tracking_confidence=0.6
         )
         self.hand_landmarker = vision.HandLandmarker.create_from_options(options)
         
