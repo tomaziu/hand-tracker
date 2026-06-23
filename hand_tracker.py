@@ -26,19 +26,14 @@ class HandTracker:
             (5,9),(9,13),(13,17)
         ]
         
-        self.captured_photo = None
-        self.photo_shape_pts = None
+        self.photos = []
         self.was_3fingers_down = False
         self.is_grabbing = False
         self.grab_offset = [0, 0]
-        self.photo_pos = [0, 0]
-        self.photo_size = (0, 0)
-        self.photo_mask = None
+        self.grabbed_photo_idx = -1
         self.capture_timer = 0
         self.capture_shape_pts = None
         self.smooth_pos = [0, 0]
-        self.trash_zone = None
-        self.trash_timer = 0
         
         self.cap = None
         self.running = False
@@ -87,7 +82,7 @@ class HandTracker:
         footer.pack(fill=tk.X, side=tk.BOTTOM)
         footer.pack_propagate(False)
         
-        self.hand_info = tk.Label(footer, text="MAOS: 0 | FPS: 0", 
+        self.hand_info = tk.Label(footer, text="MAOS: 0 | FPS: 0 | FOTOS: 0", 
                                   font=("Consolas", 10), bg="#0d0d0d", fg="#003300")
         self.hand_info.pack(side=tk.LEFT, padx=10)
         
@@ -139,6 +134,15 @@ class HandTracker:
         
         return right_hand, other_hand
         
+    def find_photo_at_pos(self, px, py):
+        for i in range(len(self.photos) - 1, -1, -1):
+            photo = self.photos[i]
+            x, y = photo['pos']
+            pw, ph = photo['size']
+            if x <= px <= x + pw and y <= py <= y + ph:
+                return i
+        return -1
+        
     def process_frame(self):
         if not self.running:
             return
@@ -183,7 +187,7 @@ class HandTracker:
             
             if result.hand_landmarks:
                 num_hands = len(result.hand_landmarks)
-                self.hand_info.config(text=f"MAOS: {num_hands} | FPS: {self.fps}")
+                self.hand_info.config(text=f"MAOS: {num_hands} | FPS: {self.fps} | FOTOS: {len(self.photos)}")
                 
                 for hand_landmarks in result.hand_landmarks:
                     pts = [(int(lm.x * w), int(lm.y * h)) for lm in hand_landmarks]
@@ -223,7 +227,7 @@ class HandTracker:
                         
                         cv2.polylines(output, [shape_pts], True, (0, 255, 65), 2, cv2.LINE_AA)
             else:
-                self.hand_info.config(text=f"MAOS: 0 | FPS: {self.fps}")
+                self.hand_info.config(text=f"MAOS: 0 | FPS: {self.fps} | FOTOS: {len(self.photos)}")
             
             if three_fingers_down and not self.was_3fingers_down and shape_pts is not None:
                 self.capture_timer = time.time()
@@ -236,7 +240,7 @@ class HandTracker:
             if self.capture_timer > 0 and self.capture_shape_pts is not None:
                 elapsed = time.time() - self.capture_timer
                 if elapsed >= 0.5:
-                    self.capture_photo_in_shape(img, self.capture_shape_pts)
+                    self.add_photo(img, self.capture_shape_pts)
                     self.capture_timer = 0
                     self.capture_shape_pts = None
                 elif self.capture_shape_pts is not None:
@@ -246,26 +250,32 @@ class HandTracker:
             
             self.was_3fingers_down = three_fingers_down
             
-            if self.captured_photo is not None and is_pinching_now and pinch_pos:
+            if is_pinching_now and pinch_pos:
                 if not self.is_grabbing:
-                    self.grab_offset[0] = pinch_pos[0] - self.photo_pos[0]
-                    self.grab_offset[1] = pinch_pos[1] - self.photo_pos[1]
-                    self.smooth_pos[0] = pinch_pos[0]
-                    self.smooth_pos[1] = pinch_pos[1]
-                self.is_grabbing = True
-                target_x = pinch_pos[0] - self.grab_offset[0]
-                target_y = pinch_pos[1] - self.grab_offset[1]
-                self.smooth_pos[0] = self.smooth_pos[0] * 0.3 + target_x * 0.7
-                self.smooth_pos[1] = self.smooth_pos[1] * 0.3 + target_y * 0.7
-                self.photo_pos[0] = int(self.smooth_pos[0])
-                self.photo_pos[1] = int(self.smooth_pos[1])
-            elif not is_pinching_now and self.is_grabbing:
-                self.trash_timer = 0
+                    idx = self.find_photo_at_pos(pinch_pos[0], pinch_pos[1])
+                    if idx >= 0:
+                        self.grabbed_photo_idx = idx
+                        photo = self.photos[idx]
+                        self.grab_offset[0] = pinch_pos[0] - photo['pos'][0]
+                        self.grab_offset[1] = pinch_pos[1] - photo['pos'][1]
+                        self.smooth_pos[0] = pinch_pos[0]
+                        self.smooth_pos[1] = pinch_pos[1]
+                        self.is_grabbing = True
+                
+                if self.is_grabbing and self.grabbed_photo_idx >= 0:
+                    photo = self.photos[self.grabbed_photo_idx]
+                    target_x = pinch_pos[0] - self.grab_offset[0]
+                    target_y = pinch_pos[1] - self.grab_offset[1]
+                    self.smooth_pos[0] = self.smooth_pos[0] * 0.3 + target_x * 0.7
+                    self.smooth_pos[1] = self.smooth_pos[1] * 0.3 + target_y * 0.7
+                    photo['pos'][0] = int(self.smooth_pos[0])
+                    photo['pos'][1] = int(self.smooth_pos[1])
+            elif not is_pinching_now:
                 self.is_grabbing = False
+                self.grabbed_photo_idx = -1
             
-            if self.captured_photo is not None:
-                self.draw_trash_bin(output)
-                self.draw_captured_photo(output)
+            for photo in self.photos:
+                self.draw_photo(output, photo)
                     
             img_pil = Image.fromarray(cv2.cvtColor(output, cv2.COLOR_BGR2RGB))
             img_tk = ImageTk.PhotoImage(image=img_pil)
@@ -275,7 +285,7 @@ class HandTracker:
             
         self.root.after(1, self.process_frame)
         
-    def capture_photo_in_shape(self, img, shape_pts):
+    def add_photo(self, img, shape_pts):
         mask = np.zeros(img.shape[:2], dtype=np.uint8)
         cv2.fillPoly(mask, [shape_pts], 255)
         
@@ -288,18 +298,19 @@ class HandTracker:
         
         crop = photo[y_min:y_max, x_min:x_max].copy()
         
-        self.captured_photo = crop
-        self.photo_size = (x_max - x_min, y_max - y_min)
-        self.photo_pos = [x_min, y_min]
-        self.photo_shape_pts = shape_pts - np.array([x_min, y_min])
+        new_photo = {
+            'image': crop,
+            'shape_pts': shape_pts - np.array([x_min, y_min]),
+            'pos': [int(x_min), int(y_min)],
+            'size': (int(x_max - x_min), int(y_max - y_min))
+        }
         
-    def draw_captured_photo(self, img):
-        if self.captured_photo is None:
-            return
+        self.photos.append(new_photo)
         
-        x = int(self.photo_pos[0])
-        y = int(self.photo_pos[1])
-        pw, ph = self.photo_size
+    def draw_photo(self, img, photo):
+        x = int(photo['pos'][0])
+        y = int(photo['pos'][1])
+        pw, ph = photo['size']
         
         h_img, w_img, _ = img.shape
         
@@ -316,11 +327,11 @@ class HandTracker:
         src_x2 = src_x1 + (x2 - x1)
         src_y2 = src_y1 + (y2 - y1)
         
-        region = self.captured_photo[src_y1:src_y2, src_x1:src_x2]
+        region = photo['image'][src_y1:src_y2, src_x1:src_x2]
         
         if region.shape[0] > 0 and region.shape[1] > 0:
             mask = np.zeros(region.shape[:2], dtype=np.uint8)
-            shifted_pts = self.photo_shape_pts - np.array([src_x1, src_y1])
+            shifted_pts = photo['shape_pts'] - np.array([src_x1, src_y1])
             cv2.fillPoly(mask, [shifted_pts.astype(np.int32)], 255)
             
             idx = mask > 0
@@ -328,53 +339,6 @@ class HandTracker:
             tinted = np.stack([gray_region // 3, gray_region, gray_region // 3], axis=-1).astype(np.uint8)
             
             img[y1:y2, x1:x2][idx] = tinted[idx]
-        
-    def draw_trash_bin(self, img):
-        h, w, _ = img.shape
-        bx = 30
-        by = 30
-        bw = 70
-        bh = 90
-        
-        self.trash_zone = (bx, by, bx + bw, by + bh)
-        
-        in_trash = False
-        if self.is_grabbing:
-            px = self.photo_pos[0] + self.photo_size[0] // 2
-            py = self.photo_pos[1] + self.photo_size[1] // 2
-            if bx + 10 <= px <= bx + bw - 10 and by + 10 <= py <= by + bh - 10:
-                in_trash = True
-        
-        if in_trash:
-            self.trash_timer += 1
-            if self.trash_timer > 30:
-                self.captured_photo = None
-                self.photo_shape_pts = None
-                self.photo_size = (0, 0)
-                self.photo_pos = [0, 0]
-                self.trash_timer = 0
-                return
-        else:
-            self.trash_timer = 0
-        
-        progress = self.trash_timer / 30.0
-        
-        if in_trash:
-            color = (0, int(100 + 155 * progress), 255)
-            cv2.rectangle(img, (bx, by), (bx + bw, by + bh), color, 2, cv2.LINE_AA)
-            fill_h = int(bh * progress)
-            overlay = img[by + bh - fill_h:by + bh, bx:bx + bw].copy()
-            cv2.rectangle(img, (bx, by + bh - fill_h), (bx + bw, by + bh), (0, 80, 200), -1)
-        else:
-            color = (0, 60, 0)
-            cv2.rectangle(img, (bx, by), (bx + bw, by + bh), color, 2, cv2.LINE_AA)
-        
-        cv2.line(img, (bx + 5, by - 3), (bx + bw - 5, by - 3), color, 2, cv2.LINE_AA)
-        cv2.rectangle(img, (bx + 25, by - 10), (bx + 45, by - 3), color, 2, cv2.LINE_AA)
-        
-        for i in range(3):
-            lx = bx + 18 + i * 12
-            cv2.line(img, (lx, by + 12), (lx, by + bh - 12), color, 2, cv2.LINE_AA)
         
     def run(self):
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
