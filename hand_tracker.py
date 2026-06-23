@@ -16,7 +16,6 @@ class HandTracker:
         self.root.title("Hand Tracker")
         self.root.geometry("900x700")
         self.root.configure(bg="#0a0a0a")
-        
         self.HAND_CONNECTIONS = [
             (0,1),(1,2),(2,3),(3,4),
             (0,5),(5,6),(6,7),(7,8),
